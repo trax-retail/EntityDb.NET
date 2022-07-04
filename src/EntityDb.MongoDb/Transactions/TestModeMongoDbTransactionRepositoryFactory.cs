@@ -1,5 +1,4 @@
-﻿using EntityDb.Common.Transactions;
-using EntityDb.MongoDb.Sessions;
+﻿using EntityDb.MongoDb.Sessions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -10,23 +9,29 @@ internal class
 {
     private (IMongoSession Normal, TestModeMongoSession TestMode)? _sessions;
 
-    public TestModeMongoDbTransactionRepositoryFactory(IMongoDbTransactionRepositoryFactory mongoDbTransactionRepositoryFactory) : base(mongoDbTransactionRepositoryFactory)
+    public TestModeMongoDbTransactionRepositoryFactory(
+        IMongoDbTransactionRepositoryFactory mongoDbTransactionRepositoryFactory) : base(
+        mongoDbTransactionRepositoryFactory)
     {
     }
 
-    public override async Task<IMongoSession> CreateSession(TransactionSessionOptions transactionSessionOptions, CancellationToken cancellationToken)
+    public override async Task<IMongoSession> CreateSession(MongoDbTransactionSessionOptions options,
+        CancellationToken cancellationToken)
     {
         if (_sessions.HasValue)
         {
             return _sessions.Value.TestMode
-                .WithTransactionSessionOptions(transactionSessionOptions);
+                .WithTransactionSessionOptions(options);
         }
 
-        var normalSession = await base.CreateSession(new TransactionSessionOptions
+        var normalOptions = new MongoDbTransactionSessionOptions
         {
-            ReadOnly = false
-        }, cancellationToken);
-        
+            ConnectionString = options.ConnectionString,
+            DatabaseName = options.DatabaseName,
+        };
+
+        var normalSession = await base.CreateSession(normalOptions, cancellationToken);
+
         var testModeSession = new TestModeMongoSession(normalSession);
 
         normalSession.StartTransaction();
@@ -34,7 +39,7 @@ internal class
         _sessions = (normalSession, testModeSession);
 
         return _sessions.Value.TestMode
-            .WithTransactionSessionOptions(transactionSessionOptions);
+            .WithTransactionSessionOptions(options);
     }
 
     public override async ValueTask DisposeAsync()

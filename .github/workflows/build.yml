@@ -1,18 +1,8 @@
 on:
   push:
     branches:
-      - '**'
+      - main
     tags-ignore:
-      - '**'
-    paths:
-      - '.github/workflows/build.yml'
-      - 'global.json'
-      - 'Directory.Build.props'
-      - 'EntityDb.sln'
-      - 'src/**'
-      - 'test/**'
-  pull_request:
-    branches:
       - '**'
     paths:
       - '.github/workflows/build.yml'

@@ -11,8 +11,8 @@ internal class EntityRepositoryFactory<TEntity> : IEntityRepositoryFactory<TEnti
     where TEntity : IEntity<TEntity>
 {
     private readonly IServiceProvider _serviceProvider;
-    private readonly ITransactionRepositoryFactory _transactionRepositoryFactory;
     private readonly ISnapshotRepositoryFactory<TEntity>? _snapshotRepositoryFactory;
+    private readonly ITransactionRepositoryFactory _transactionRepositoryFactory;
 
     public EntityRepositoryFactory
     (
@@ -32,13 +32,14 @@ internal class EntityRepositoryFactory<TEntity> : IEntityRepositoryFactory<TEnti
         var transactionRepository =
             await _transactionRepositoryFactory.CreateRepository(transactionSessionOptionsName, cancellationToken);
 
-        if (_snapshotRepositoryFactory == null || snapshotSessionOptionsName == null)
+        if (_snapshotRepositoryFactory is null || snapshotSessionOptionsName is null)
         {
             return EntityRepository<TEntity>.Create(_serviceProvider,
                 transactionRepository);
         }
 
-        var snapshotRepository = await _snapshotRepositoryFactory.CreateRepository(snapshotSessionOptionsName, cancellationToken);
+        var snapshotRepository =
+            await _snapshotRepositoryFactory.CreateRepository(snapshotSessionOptionsName, cancellationToken);
 
         return EntityRepository<TEntity>.Create(_serviceProvider,
             transactionRepository, snapshotRepository);

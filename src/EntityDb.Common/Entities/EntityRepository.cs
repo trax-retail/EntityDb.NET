@@ -4,7 +4,6 @@ using EntityDb.Abstractions.Transactions;
 using EntityDb.Abstractions.ValueObjects;
 using EntityDb.Common.Disposables;
 using EntityDb.Common.Exceptions;
-using EntityDb.Common.Extensions;
 using EntityDb.Common.Queries;
 using Microsoft.Extensions.DependencyInjection;
 using System;
@@ -18,9 +17,6 @@ internal class EntityRepository<TEntity> : DisposableResourceBaseClass, IEntityR
     where TEntity : IEntity<TEntity>
 {
     private readonly IEnumerable<ITransactionSubscriber> _transactionSubscribers;
-    
-    public ITransactionRepository TransactionRepository { get; }
-    public ISnapshotRepository<TEntity>? SnapshotRepository { get; }
 
     public EntityRepository
     (
@@ -34,35 +30,28 @@ internal class EntityRepository<TEntity> : DisposableResourceBaseClass, IEntityR
         SnapshotRepository = snapshotRepository;
     }
 
-    public async Task<TEntity> GetCurrent(Id entityId, CancellationToken cancellationToken = default)
+    public ITransactionRepository TransactionRepository { get; }
+    public ISnapshotRepository<TEntity>? SnapshotRepository { get; }
+
+    public async Task<TEntity> GetSnapshot(Pointer entityPointer, CancellationToken cancellationToken = default)
     {
-        var entity = await SnapshotRepository.GetSnapshotOrDefault(entityId) ?? TEntity.Construct(entityId);
+        var snapshot = SnapshotRepository is not null
+            ? await SnapshotRepository.GetSnapshotOrDefault(entityPointer, cancellationToken) ??
+              TEntity.Construct(entityPointer.Id)
+            : TEntity.Construct(entityPointer.Id);
 
-        var versionNumber = entity.GetVersionNumber();
-
-        var commandQuery = new GetCurrentEntityQuery(entityId, versionNumber);
+        var commandQuery = new GetEntityCommandsQuery(entityPointer, snapshot.GetVersionNumber());
 
         var commands = await TransactionRepository.GetCommands(commandQuery, cancellationToken);
 
-        entity = entity.Reduce(commands);
+        var entity = snapshot.Reduce(commands);
 
-        if (entity.GetVersionNumber() == VersionNumber.MinValue)
+        if (!entityPointer.IsSatisfiedBy(entity.GetVersionNumber()))
         {
-            throw new EntityNotCreatedException();
+            throw new SnapshotPointerDoesNotExistException();
         }
 
         return entity;
-    }
-
-    public async Task<TEntity> GetAtVersion(Id entityId, VersionNumber lteVersionNumber, CancellationToken cancellationToken = default)
-    {
-        var commandQuery = new GetEntityAtVersionQuery(entityId, lteVersionNumber);
-
-        var commands = await TransactionRepository.GetCommands(commandQuery, cancellationToken);
-
-        return TEntity
-            .Construct(entityId)
-            .Reduce(commands);
     }
 
     public async Task<bool> PutTransaction(ITransaction transaction, CancellationToken cancellationToken = default)
@@ -81,7 +70,7 @@ internal class EntityRepository<TEntity> : DisposableResourceBaseClass, IEntityR
     {
         await TransactionRepository.DisposeAsync();
 
-        if (SnapshotRepository != null)
+        if (SnapshotRepository is not null)
         {
             await SnapshotRepository.DisposeAsync();
         }
@@ -102,7 +91,7 @@ internal class EntityRepository<TEntity> : DisposableResourceBaseClass, IEntityR
         ISnapshotRepository<TEntity>? snapshotRepository = null
     )
     {
-        if (snapshotRepository == null)
+        if (snapshotRepository is null)
         {
             return ActivatorUtilities.CreateInstance<EntityRepository<TEntity>>(serviceProvider,
                 transactionRepository);

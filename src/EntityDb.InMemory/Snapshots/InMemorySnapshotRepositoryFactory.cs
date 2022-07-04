@@ -9,17 +9,18 @@ using System.Threading.Tasks;
 
 namespace EntityDb.InMemory.Snapshots;
 
-internal class InMemorySnapshotRepositoryFactory<TSnapshot> : DisposableResourceBaseClass, ISnapshotRepositoryFactory<TSnapshot>
+internal class InMemorySnapshotRepositoryFactory<TSnapshot> : DisposableResourceBaseClass,
+    ISnapshotRepositoryFactory<TSnapshot>
 {
-    private readonly IServiceProvider _serviceProvider;
     private readonly IInMemorySession<TSnapshot> _inMemorySession;
-    private readonly IOptionsFactory<SnapshotSessionOptions> _optionsFactory;
+    private readonly IOptionsFactory<InMemorySnapshotSessionOptions> _optionsFactory;
+    private readonly IServiceProvider _serviceProvider;
 
     public InMemorySnapshotRepositoryFactory
     (
         IServiceProvider serviceProvider,
         IInMemorySession<TSnapshot> inMemorySession,
-        IOptionsFactory<SnapshotSessionOptions> optionsFactory
+        IOptionsFactory<InMemorySnapshotSessionOptions> optionsFactory
     )
     {
         _serviceProvider = serviceProvider;
@@ -27,18 +28,19 @@ internal class InMemorySnapshotRepositoryFactory<TSnapshot> : DisposableResource
         _optionsFactory = optionsFactory;
     }
 
-    public async Task<ISnapshotRepository<TSnapshot>> CreateRepository(string snapshotSessionOptionsName, CancellationToken cancellationToken = default)
+    public async Task<ISnapshotRepository<TSnapshot>> CreateRepository(string snapshotSessionOptionsName,
+        CancellationToken cancellationToken = default)
     {
         await Task.Yield();
-        
-        var snapshotSessionOptions = _optionsFactory.Create(snapshotSessionOptionsName);
 
-        var inMemorySession = snapshotSessionOptions.ReadOnly
+        var options = _optionsFactory.Create(snapshotSessionOptionsName);
+
+        var inMemorySession = options.ReadOnly
             ? new ReadOnlyInMemorySession<TSnapshot>(_inMemorySession)
             : _inMemorySession;
 
         var inMemorySnapshotRepository = new InMemorySnapshotRepository<TSnapshot>(inMemorySession);
-        
+
         cancellationToken.ThrowIfCancellationRequested();
 
         return TryCatchSnapshotRepository<TSnapshot>.Create(_serviceProvider, inMemorySnapshotRepository);

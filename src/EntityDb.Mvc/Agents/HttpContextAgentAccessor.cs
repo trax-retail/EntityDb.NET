@@ -4,14 +4,18 @@ using EntityDb.Common.Exceptions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace EntityDb.Mvc.Agents;
 
-internal sealed class HttpContextAgentAccessor : AgentAccessorBase
+internal sealed class HttpContextAgentAccessor : IAgentAccessor
 {
+    private static readonly Dictionary<string, string> DefaultApplicationInfo = new();
+    private readonly IAgentSignatureAugmenter? _agentSignatureAugmenter;
+
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly IOptionsFactory<HttpContextAgentSignatureOptions> _httpContextAgentOptionsFactory;
-    private readonly IAgentSignatureAugmenter? _agentSignatureAugmenter;
 
     public HttpContextAgentAccessor
     (
@@ -25,20 +29,31 @@ internal sealed class HttpContextAgentAccessor : AgentAccessorBase
         _agentSignatureAugmenter = agentSignatureAugmenter;
     }
 
-    private static readonly Dictionary<string, string> DefaultApplicationInfo = new();
-
-    protected override IAgent CreateAgent()
+    public async Task<IAgent> GetAgentAsync(string signatureOptionsName, CancellationToken cancellationToken)
     {
         var httpContext = _httpContextAccessor.HttpContext;
 
-        if (httpContext == null)
+        if (httpContext is null)
         {
             throw new NoAgentException();
         }
 
-        var applicationInfo = _agentSignatureAugmenter?
-            .GetApplicationInfo() ?? DefaultApplicationInfo;
+        var applicationInfo = DefaultApplicationInfo;
 
-        return new HttpContextAgent(httpContext, _httpContextAgentOptionsFactory, applicationInfo);
+        if (_agentSignatureAugmenter != null)
+        {
+            applicationInfo = await _agentSignatureAugmenter.GetApplicationInfoAsync(cancellationToken);
+        }
+
+        var signatureOptions = _httpContextAgentOptionsFactory.Create(signatureOptionsName);
+
+        var signature = HttpContextAgentSignature.GetSnapshot
+        (
+            httpContext,
+            signatureOptions,
+            applicationInfo
+        );
+
+        return new StandardAgent(signature);
     }
 }

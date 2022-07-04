@@ -6,7 +6,8 @@ using System.Threading.Tasks;
 
 namespace EntityDb.Common.Snapshots;
 
-internal sealed class TestModeSnapshotRepository<TSnapshot> : DisposableResourceBaseClass, ISnapshotRepository<TSnapshot>
+internal sealed class TestModeSnapshotRepository<TSnapshot> : DisposableResourceBaseClass,
+    ISnapshotRepository<TSnapshot>
 {
     private readonly ISnapshotRepository<TSnapshot> _snapshotRepository;
     private readonly TestModeSnapshotManager<TSnapshot> _testModeSnapshotManager;
@@ -21,23 +22,24 @@ internal sealed class TestModeSnapshotRepository<TSnapshot> : DisposableResource
         _testModeSnapshotManager = testModeSnapshotManager;
     }
 
-    public Task<bool> PutSnapshot(Id snapshotId, TSnapshot snapshot, CancellationToken cancellationToken = default)
+    public Task<bool> PutSnapshot(Pointer snapshotPointer, TSnapshot snapshot,
+        CancellationToken cancellationToken = default)
     {
-        _testModeSnapshotManager.AddSnapshotId(this, snapshotId);
+        _testModeSnapshotManager.AddSnapshotPointer(this, snapshotPointer);
 
-        return _snapshotRepository.PutSnapshot(snapshotId, snapshot, cancellationToken);
+        return _snapshotRepository.PutSnapshot(snapshotPointer, snapshot, cancellationToken);
     }
 
-    public Task<TSnapshot?> GetSnapshot(Id snapshotId, CancellationToken cancellationToken = default)
+    public Task<TSnapshot?> GetSnapshotOrDefault(Pointer snapshotPointer, CancellationToken cancellationToken = default)
     {
-        return _snapshotRepository.GetSnapshot(snapshotId, cancellationToken);
+        return _snapshotRepository.GetSnapshotOrDefault(snapshotPointer, cancellationToken);
     }
 
-    public Task<bool> DeleteSnapshots(Id[] snapshotIds, CancellationToken cancellationToken = default)
+    public Task<bool> DeleteSnapshots(Pointer[] snapshotPointers, CancellationToken cancellationToken = default)
     {
-        _testModeSnapshotManager.RemoveSnapshotIds(this, snapshotIds);
+        _testModeSnapshotManager.RemoveSnapshotPointers(this, snapshotPointers);
 
-        return _snapshotRepository.DeleteSnapshots(snapshotIds, cancellationToken);
+        return _snapshotRepository.DeleteSnapshots(snapshotPointers, cancellationToken);
     }
 
     public override async ValueTask DisposeAsync()

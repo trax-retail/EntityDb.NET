@@ -3,64 +3,68 @@ using EntityDb.Abstractions.Snapshots;
 using EntityDb.Abstractions.Transactions;
 using EntityDb.Abstractions.ValueObjects;
 using EntityDb.Common.Disposables;
-using EntityDb.Common.Queries;
+using EntityDb.Common.Exceptions;
 using Microsoft.Extensions.DependencyInjection;
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace EntityDb.Common.Projections;
 
-internal sealed class ProjectionRepository<TProjection> : DisposableResourceBaseClass, IProjectionRepository<TProjection>
+internal sealed class ProjectionRepository<TProjection> : DisposableResourceBaseClass,
+    IProjectionRepository<TProjection>
     where TProjection : IProjection<TProjection>
 {
-    public IProjectionStrategy<TProjection> ProjectionStrategy { get; }
-    public ITransactionRepository TransactionRepository { get; }
-    public ISnapshotRepository<TProjection> SnapshotRepository { get; }
-    
     public ProjectionRepository
     (
-        IProjectionStrategy<TProjection> projectionStrategy,
-        ISnapshotRepository<TProjection> snapshotRepository,
-        ITransactionRepository transactionRepository
+        ITransactionRepository transactionRepository,
+        ISnapshotRepository<TProjection>? snapshotRepository = null
     )
     {
-        ProjectionStrategy = projectionStrategy;
         TransactionRepository = transactionRepository;
         SnapshotRepository = snapshotRepository;
     }
 
-    public async Task<TProjection> GetCurrent(Id projectionId)
+    public ITransactionRepository TransactionRepository { get; }
+
+    public ISnapshotRepository<TProjection>? SnapshotRepository { get; }
+
+    public Id? GetProjectionIdOrDefault(object entity)
     {
-        var projection = await SnapshotRepository.GetSnapshot(projectionId) ?? TProjection.Construct(projectionId);
+        return TProjection.GetProjectionIdOrDefault(entity);
+    }
 
-        var entityIds = await ProjectionStrategy.GetEntityIds(projectionId, projection);
+    public async Task<TProjection> GetSnapshot(Pointer projectionPointer, CancellationToken cancellationToken = default)
+    {
+        var projection = SnapshotRepository is not null
+            ? await SnapshotRepository.GetSnapshotOrDefault(projectionPointer, cancellationToken) ??
+              TProjection.Construct(projectionPointer.Id)
+            : TProjection.Construct(projectionPointer.Id);
 
-        if (entityIds.Length == 0)
+        var commandQuery = projection.GetCommandQuery(projectionPointer);
+
+        var annotatedCommands = await TransactionRepository.GetAnnotatedCommands(commandQuery, cancellationToken);
+
+        projection = projection.Reduce(annotatedCommands);
+
+        if (!projectionPointer.IsSatisfiedBy(projection.GetVersionNumber()))
         {
-            return projection;
-        }
-        
-        foreach (var entityId in entityIds)
-        {
-            var entityVersionNumber = projection.GetEntityVersionNumber(entityId);
-            
-            var commandQuery = new GetCurrentEntityQuery(entityId, entityVersionNumber);
-
-            var annotatedCommands = await TransactionRepository.GetAnnotatedCommands(commandQuery);
-
-            projection = projection.Reduce(annotatedCommands);
+            throw new SnapshotPointerDoesNotExistException();
         }
 
         return projection;
     }
-    
-    public static ProjectionRepository<TProjection> Create
-    (
-        IServiceProvider serviceProvider,
+
+    public static IProjectionRepository<TProjection> Create(IServiceProvider serviceProvider,
         ITransactionRepository transactionRepository,
-        ISnapshotRepository<TProjection> snapshotRepository
-    )
+        ISnapshotRepository<TProjection>? snapshotRepository = null)
     {
+        if (snapshotRepository is null)
+        {
+            return ActivatorUtilities.CreateInstance<ProjectionRepository<TProjection>>(serviceProvider,
+                transactionRepository);
+        }
+
         return ActivatorUtilities.CreateInstance<ProjectionRepository<TProjection>>(serviceProvider,
             transactionRepository, snapshotRepository);
     }

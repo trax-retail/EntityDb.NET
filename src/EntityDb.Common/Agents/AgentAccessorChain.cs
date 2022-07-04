@@ -5,22 +5,23 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace EntityDb.Common.Agents;
 
 /// <summary>
 ///     Represents a type that chains together multiple instances of <see cref="IAgentAccessor" /> and returns the
-///     <see cref="IAgent"/> returned by the first <see cref="IAgentAccessor" /> that does not throw an exception.
-///
-///     If all instances of <see cref="IAgentAccessor"/> throw an exception, this type will throw a
-///     <see cref="NoAgentException"/>.
+///     <see cref="IAgent" /> returned by the first <see cref="IAgentAccessor" /> that does not throw an exception.
+///     If all instances of <see cref="IAgentAccessor" /> throw an exception, this type will throw a
+///     <see cref="NoAgentException" />.
 /// </summary>
 public class AgentAccessorChain : IAgentAccessor
 {
-    private readonly ILogger<AgentAccessorChain> _logger;
     private readonly IAgentAccessor[] _agentAccessors;
-    
-    /// <ignore/>
+    private readonly ILogger<AgentAccessorChain> _logger;
+
+    /// <ignore />
     public AgentAccessorChain
     (
         ILogger<AgentAccessorChain> logger,
@@ -29,7 +30,7 @@ public class AgentAccessorChain : IAgentAccessor
     ) : this(logger, options.Value, outerServiceProvider)
     {
     }
-    
+
     internal AgentAccessorChain
     (
         ILogger<AgentAccessorChain> logger,
@@ -38,14 +39,35 @@ public class AgentAccessorChain : IAgentAccessor
     )
     {
         var serviceProvider = GetServiceProvider(outerServiceProvider, options);
-        
+
         _logger = logger;
         _agentAccessors = serviceProvider
             .GetServices<IAgentAccessor>()
             .ToArray();
     }
 
-    private static IServiceProvider GetServiceProvider(IServiceProvider outerServiceProvider, AgentAccessorChainOptions options)
+    /// <inheritdoc />
+    public async Task<IAgent> GetAgentAsync(string signatureOptionsName, CancellationToken cancellationToken)
+    {
+        foreach (var agentAccessor in _agentAccessors)
+        {
+            try
+            {
+                return await agentAccessor.GetAgentAsync(signatureOptionsName, cancellationToken);
+            }
+            catch (Exception exception)
+            {
+                _logger.LogDebug(exception, "Agent accessor threw an exception. Moving on to next agent accessor");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
+        throw new NoAgentException();
+    }
+
+    private static IServiceProvider GetServiceProvider(IServiceProvider outerServiceProvider,
+        AgentAccessorChainOptions options)
     {
         IServiceCollection serviceCollectionCopy = new ServiceCollection();
 
@@ -58,30 +80,12 @@ public class AgentAccessorChain : IAgentAccessor
                 innerServiceLifetime
             ));
         }
-        
+
         foreach (var serviceDescriptor in options.ServiceCollection)
         {
             serviceCollectionCopy.Add(serviceDescriptor);
         }
 
         return serviceCollectionCopy.BuildServiceProvider();
-    }
-
-    /// <inheritdoc />
-    public IAgent GetAgent()
-    {
-        foreach (var agentAccessor in _agentAccessors)
-        {
-            try
-            {
-                return agentAccessor.GetAgent();
-            }
-            catch (Exception exception)
-            {
-                _logger.LogDebug(exception, "Agent accessor threw an exception. Moving on to next agent accessor");
-            }
-        }
-
-        throw new NoAgentException();
     }
 }

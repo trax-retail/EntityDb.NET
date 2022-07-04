@@ -1,5 +1,4 @@
 ﻿using EntityDb.Abstractions.Disposables;
-using EntityDb.Common.Transactions;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using System.Collections.Generic;
@@ -14,7 +13,7 @@ internal interface IMongoSession : IDisposableResource
 
     Task Insert<TDocument>(string collectionName,
         TDocument[] bsonDocuments, CancellationToken cancellationToken);
-    
+
     Task<List<TDocument>> Find<TDocument>
     (
         string collectionName,
@@ -25,7 +24,7 @@ internal interface IMongoSession : IDisposableResource
         int? limit,
         CancellationToken cancellationToken
     );
-        
+
     Task Delete<TDocument>(string collectionName,
         FilterDefinition<TDocument> filterDefinition, CancellationToken cancellationToken);
 
@@ -33,5 +32,5 @@ internal interface IMongoSession : IDisposableResource
     Task CommitTransaction(CancellationToken cancellationToken);
     Task AbortTransaction();
 
-    IMongoSession WithTransactionSessionOptions(TransactionSessionOptions transactionSessionOptions);
+    IMongoSession WithTransactionSessionOptions(MongoDbTransactionSessionOptions options);
 }

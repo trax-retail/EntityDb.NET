@@ -1,6 +1,5 @@
 ﻿using EntityDb.Common.Disposables;
 using EntityDb.Common.Exceptions;
-using EntityDb.Common.Transactions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
@@ -18,45 +17,18 @@ internal record MongoSession
     ILogger<MongoSession> Logger,
     IMongoDatabase MongoDatabase,
     IClientSessionHandle ClientSessionHandle,
-    TransactionSessionOptions TransactionSessionOptions
+    MongoDbTransactionSessionOptions Options
 ) : DisposableResourceBaseRecord, IMongoSession
 {
     private static readonly WriteConcern WriteConcern = WriteConcern.WMajority;
 
-    private ReadPreference GetReadPreference()
-    {
-        if (!TransactionSessionOptions.ReadOnly)
-        {
-            return ReadPreference.Primary;
-        }
-
-        return TransactionSessionOptions.SecondaryPreferred
-            ? ReadPreference.SecondaryPreferred
-            : ReadPreference.PrimaryPreferred;
-    }
-
-    [ExcludeFromCodeCoverage(Justification = "Tests should always run in a transaction.")]
-    private ReadConcern GetReadConcern()
-    {
-        return ClientSessionHandle.IsInTransaction
-            ? ReadConcern.Snapshot
-            : ReadConcern.Majority;
-    }
-
-    private void AssertNotReadOnly()
-    {
-        if (TransactionSessionOptions.ReadOnly)
-        {
-            throw new CannotWriteInReadOnlyModeException();
-        }
-    }
-
-    public async Task Insert<TDocument>(string collectionName, TDocument[] bsonDocuments, CancellationToken cancellationToken)
+    public async Task Insert<TDocument>(string collectionName, TDocument[] bsonDocuments,
+        CancellationToken cancellationToken)
     {
         AssertNotReadOnly();
 
         var serverSessionId = ClientSessionHandle.ServerSession.Id.ToString();
-        
+
         Logger
             .LogInformation
             (
@@ -66,7 +38,7 @@ internal record MongoSession
                 serverSessionId,
                 bsonDocuments.Length
             );
-        
+
         await MongoDatabase
             .GetCollection<TDocument>(collectionName)
             .InsertManyAsync
@@ -75,7 +47,7 @@ internal record MongoSession
                 bsonDocuments,
                 cancellationToken: cancellationToken
             );
-        
+
         Logger
             .LogInformation
             (
@@ -102,30 +74,27 @@ internal record MongoSession
             .GetCollection<BsonDocument>(collectionName)
             .WithReadPreference(GetReadPreference())
             .WithReadConcern(GetReadConcern())
-            .Find(ClientSessionHandle, filter, new FindOptions
-            {
-                MaxTime = TransactionSessionOptions.ReadTimeout
-            })
+            .Find(ClientSessionHandle, filter, new FindOptions { MaxTime = Options.ReadTimeout })
             .Project(projection);
 
-        if (sort != null)
+        if (sort is not null)
         {
             find = find.Sort(sort);
         }
 
-        if (skip != null)
+        if (skip is not null)
         {
             find = find.Skip(skip);
         }
 
-        if (limit != null)
+        if (limit is not null)
         {
             find = find.Limit(limit);
         }
 
         var query = find.ToString();
         var serverSessionId = ClientSessionHandle.ServerSession.Id.ToString();
-        
+
         Logger
             .LogInformation
             (
@@ -137,7 +106,7 @@ internal record MongoSession
             );
 
         var documents = await find.ToListAsync(cancellationToken);
-        
+
         Logger
             .LogInformation
             (
@@ -158,7 +127,9 @@ internal record MongoSession
         AssertNotReadOnly();
 
         var serverSessionId = ClientSessionHandle.ServerSession.Id.ToString();
-        var command = MongoDatabase.GetCollection<TDocument>(collectionName).Find(filterDefinition).ToString()!.Replace("find", "deleteMany");
+        var command =
+            MongoDatabase.GetCollection<TDocument>(collectionName).Find(filterDefinition).ToString()!.Replace("find",
+                "deleteMany");
 
         Logger
             .LogInformation
@@ -169,7 +140,7 @@ internal record MongoSession
                 serverSessionId,
                 command
             );
-        
+
         var deleteResult = await MongoDatabase
             .GetCollection<TDocument>(collectionName)
             .DeleteManyAsync
@@ -190,12 +161,9 @@ internal record MongoSession
             );
     }
 
-    public IMongoSession WithTransactionSessionOptions(TransactionSessionOptions transactionSessionOptions)
+    public IMongoSession WithTransactionSessionOptions(MongoDbTransactionSessionOptions options)
     {
-        return this with
-        {
-            TransactionSessionOptions = transactionSessionOptions
-        };
+        return this with { Options = options };
     }
 
     public void StartTransaction()
@@ -205,11 +173,12 @@ internal record MongoSession
         ClientSessionHandle.StartTransaction(new TransactionOptions
         (
             writeConcern: WriteConcern,
-            maxCommitTime: TransactionSessionOptions.WriteTimeout
+            maxCommitTime: Options.WriteTimeout
         ));
     }
 
-    [ExcludeFromCodeCoverage(Justification = "Tests should run with the Debug configuration, and should not execute this method.")]
+    [ExcludeFromCodeCoverage(Justification =
+        "Tests should run with the Debug configuration, and should not execute this method.")]
     public async Task CommitTransaction(CancellationToken cancellationToken)
     {
         AssertNotReadOnly();
@@ -231,14 +200,43 @@ internal record MongoSession
         return ValueTask.CompletedTask;
     }
 
+    private ReadPreference GetReadPreference()
+    {
+        if (!Options.ReadOnly)
+        {
+            return ReadPreference.Primary;
+        }
+
+        return Options.SecondaryPreferred
+            ? ReadPreference.SecondaryPreferred
+            : ReadPreference.PrimaryPreferred;
+    }
+
+    [ExcludeFromCodeCoverage(Justification = "Tests should always run in a transaction.")]
+    private ReadConcern GetReadConcern()
+    {
+        return ClientSessionHandle.IsInTransaction
+            ? ReadConcern.Snapshot
+            : ReadConcern.Majority;
+    }
+
+    private void AssertNotReadOnly()
+    {
+        if (Options.ReadOnly)
+        {
+            throw new CannotWriteInReadOnlyModeException();
+        }
+    }
+
     public static IMongoSession Create
     (
         IServiceProvider serviceProvider,
         IMongoDatabase mongoDatabase,
         IClientSessionHandle clientSessionHandle,
-        TransactionSessionOptions transactionSessionOptions
+        MongoDbTransactionSessionOptions options
     )
     {
-        return ActivatorUtilities.CreateInstance<MongoSession>(serviceProvider, mongoDatabase, clientSessionHandle, transactionSessionOptions);
+        return ActivatorUtilities.CreateInstance<MongoSession>(serviceProvider, mongoDatabase, clientSessionHandle,
+            options);
     }
 }

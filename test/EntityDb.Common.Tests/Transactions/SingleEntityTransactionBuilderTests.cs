@@ -1,16 +1,16 @@
-﻿using EntityDb.Abstractions.Entities;
+﻿using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using EntityDb.Abstractions.Entities;
+using EntityDb.Abstractions.Transactions.Builders;
 using EntityDb.Abstractions.Transactions.Steps;
+using EntityDb.Abstractions.ValueObjects;
+using EntityDb.Common.Entities;
 using EntityDb.Common.Exceptions;
 using EntityDb.Common.Leases;
 using EntityDb.Common.Tests.Implementations.Commands;
-using EntityDb.Common.Tests.Implementations.Entities;
-using EntityDb.Common.Transactions.Builders;
 using Microsoft.Extensions.DependencyInjection;
 using Shouldly;
-using System;
-using System.Collections.Generic;
-using System.Threading.Tasks;
-using EntityDb.Abstractions.ValueObjects;
 using Xunit;
 
 namespace EntityDb.Common.Tests.Transactions;
@@ -21,16 +21,19 @@ public class SingleEntityTransactionBuilderTests : TestsBase<Startup>
     {
     }
 
-    [Fact]
-    public void GivenEntityNotKnown_WhenGettingEntity_ThenThrow()
+    private async Task Generic_GivenEntityNotKnown_WhenGettingEntity_ThenThrow<TEntity>(EntityAdder entityAdder)
+        where TEntity : IEntity<TEntity>
     {
         // ARRANGE
 
-        using var serviceScope = CreateServiceScope();
+        using var serviceScope = CreateServiceScope(serviceCollection =>
+        {
+            entityAdder.AddDependencies.Invoke(serviceCollection);
+        });
 
-        var transactionBuilder = serviceScope.ServiceProvider
-            .GetRequiredService<TransactionBuilder<TestEntity>>()
-            .ForSingleEntity(default);
+        var transactionBuilder = await serviceScope.ServiceProvider
+            .GetRequiredService<ITransactionBuilderFactory<TEntity>>()
+            .CreateForSingleEntity(default!, default);
 
         // ASSERT
 
@@ -39,21 +42,25 @@ public class SingleEntityTransactionBuilderTests : TestsBase<Startup>
         Should.Throw<KeyNotFoundException>(() => transactionBuilder.GetEntity());
     }
 
-    [Fact]
-    public void GivenEntityKnown_WhenGettingEntity_ThenReturnExpectedEntity()
+    private async Task Generic_GivenEntityKnown_WhenGettingEntity_ThenReturnExpectedEntity<TEntity>(
+        EntityAdder entityAdder)
+        where TEntity : IEntity<TEntity>
     {
         // ARRANGE
 
-        using var serviceScope = CreateServiceScope();
+        using var serviceScope = CreateServiceScope(serviceCollection =>
+        {
+            entityAdder.AddDependencies.Invoke(serviceCollection);
+        });
 
         var expectedEntityId = Id.NewId();
 
-        var expectedEntity = TestEntity
+        var expectedEntity = TEntity
             .Construct(expectedEntityId);
 
-        var transactionBuilder = serviceScope.ServiceProvider
-            .GetRequiredService<TransactionBuilder<TestEntity>>()
-            .ForSingleEntity(expectedEntityId);
+        var transactionBuilder = await serviceScope.ServiceProvider
+            .GetRequiredService<ITransactionBuilderFactory<TEntity>>()
+            .CreateForSingleEntity(default!, expectedEntityId);
 
         transactionBuilder.Load(expectedEntity);
 
@@ -72,34 +79,41 @@ public class SingleEntityTransactionBuilderTests : TestsBase<Startup>
         actualEntity.ShouldBe(expectedEntity);
     }
 
-    [Fact]
-    public void GivenLeasingStrategy_WhenBuildingNewEntityWithLease_ThenTransactionDoesInsertLeases()
+    private async Task
+        Generic_GivenLeasingStrategy_WhenBuildingNewEntityWithLease_ThenTransactionDoesInsertLeases<TEntity>(
+            EntityAdder entityAdder)
+        where TEntity : IEntity<TEntity>
     {
         // ARRANGE
 
-        using var serviceScope = CreateServiceScope();
+        using var serviceScope = CreateServiceScope(serviceCollection =>
+        {
+            entityAdder.AddDependencies.Invoke(serviceCollection);
+        });
 
-        var transactionBuilder = serviceScope.ServiceProvider
-            .GetRequiredService<TransactionBuilder<TestEntity>>()
-            .ForSingleEntity(default);
+        var transactionBuilder = await serviceScope.ServiceProvider
+            .GetRequiredService<ITransactionBuilderFactory<TEntity>>()
+            .CreateForSingleEntity(default!, default);
 
         // ACT
 
         var transaction = transactionBuilder
             .Add(new Lease(default!, default!, default!))
-            .Build(default!, default);
+            .Build(default);
 
         // ASSERT
 
         transaction.Steps.Length.ShouldBe(1);
-            
-        var leaseTransactionStep = transaction.Steps[0].ShouldBeAssignableTo<IAddLeasesTransactionStep>()!;
+
+        var leaseTransactionStep =
+            transaction.Steps[0].ShouldBeAssignableTo<IAddLeasesTransactionStep>().ShouldNotBeNull();
 
         leaseTransactionStep.Leases.ShouldNotBeEmpty();
     }
 
-    [Fact]
-    public async Task GivenExistingEntityId_WhenUsingEntityIdForLoadTwice_ThenLoadThrows()
+    private async Task Generic_GivenExistingEntityId_WhenUsingEntityIdForLoadTwice_ThenLoadThrows<TEntity>(
+        EntityAdder entityAdder)
+        where TEntity : IEntity<TEntity>
     {
         // ARRANGE
 
@@ -107,20 +121,22 @@ public class SingleEntityTransactionBuilderTests : TestsBase<Startup>
 
         using var serviceScope = CreateServiceScope(serviceCollection =>
         {
+            entityAdder.AddDependencies.Invoke(serviceCollection);
+
             serviceCollection.AddScoped(_ =>
                 GetMockedTransactionRepositoryFactory(
                     new object[] { new DoNothing() }));
         });
 
-        var transactionBuilder = serviceScope.ServiceProvider
-            .GetRequiredService<TransactionBuilder<TestEntity>>()
-            .ForSingleEntity(entityId);
+        var transactionBuilder = await serviceScope.ServiceProvider
+            .GetRequiredService<ITransactionBuilderFactory<TEntity>>()
+            .CreateForSingleEntity(default!, default);
 
         await using var entityRepository = await serviceScope.ServiceProvider
-            .GetRequiredService<IEntityRepositoryFactory<TestEntity>>()
+            .GetRequiredService<IEntityRepositoryFactory<TEntity>>()
             .CreateRepository(default!);
 
-        var entity = await entityRepository.GetCurrent(entityId);
+        var entity = await entityRepository.GetSnapshot(entityId);
 
         // ACT
 
@@ -128,39 +144,36 @@ public class SingleEntityTransactionBuilderTests : TestsBase<Startup>
 
         // ASSERT
 
-        Should.Throw<EntityAlreadyKnownException>(() =>
-        {
-            transactionBuilder.Load(entity);
-        });
+        Should.Throw<EntityAlreadyKnownException>(() => { transactionBuilder.Load(entity); });
     }
 
-    [Fact]
-    public void GivenNonExistingEntityId_WhenUsingValidVersioningStrategy_ThenVersionNumberAutoIncrements()
+    private async Task
+        Generic_GivenNonExistingEntityId_WhenUsingValidVersioningStrategy_ThenVersionNumberAutoIncrements<TEntity>(
+            EntityAdder entityAdder)
+        where TEntity : IEntity<TEntity>
     {
         // ARRANGE
 
         var numberOfVersionsToTest = new VersionNumber(10);
 
-        var entityId = Id.NewId();
-
         using var serviceScope = CreateServiceScope(serviceCollection =>
         {
+            entityAdder.AddDependencies.Invoke(serviceCollection);
+
             serviceCollection.AddScoped(_ =>
                 GetMockedTransactionRepositoryFactory());
         });
 
-        var transactionBuilder = serviceScope.ServiceProvider
-            .GetRequiredService<TransactionBuilder<TestEntity>>()
-            .ForSingleEntity(entityId);
+        var transactionBuilder = await serviceScope.ServiceProvider
+            .GetRequiredService<ITransactionBuilderFactory<TEntity>>()
+            .CreateForSingleEntity(default!, default);
 
         // ACT
 
         for (var i = new VersionNumber(1); i.Value <= numberOfVersionsToTest.Value; i = i.Next())
-        {
             transactionBuilder.Append(new DoNothing());
-        }
 
-        var transaction = transactionBuilder.Build(default!, default);
+        var transaction = transactionBuilder.Build(default);
 
         // ASSERT
 
@@ -168,14 +181,16 @@ public class SingleEntityTransactionBuilderTests : TestsBase<Startup>
         {
             var index = (int)(v.Value - 1);
 
-            var commandTransactionStep = transaction.Steps[index].ShouldBeAssignableTo<IAppendCommandTransactionStep>()!;
+            var commandTransactionStep = transaction.Steps[index].ShouldBeAssignableTo<IAppendCommandTransactionStep>()
+                .ShouldNotBeNull();
 
             commandTransactionStep.EntityVersionNumber.ShouldBe(v);
         }
     }
 
-    [Fact]
-    public async Task GivenExistingEntity_WhenAppendingNewCommand_ThenTransactionBuilds()
+    private async Task Generic_GivenExistingEntity_WhenAppendingNewCommand_ThenTransactionBuilds<TEntity>(
+        EntityAdder entityAdder)
+        where TEntity : IEntity<TEntity>
     {
         // ARRANGE
 
@@ -183,33 +198,104 @@ public class SingleEntityTransactionBuilderTests : TestsBase<Startup>
 
         using var serviceScope = CreateServiceScope(serviceCollection =>
         {
+            entityAdder.AddDependencies.Invoke(serviceCollection);
+
             serviceCollection.AddScoped(_ =>
                 GetMockedTransactionRepositoryFactory(new object[] { new DoNothing() }));
         });
 
-        var transactionBuilder = serviceScope.ServiceProvider
-            .GetRequiredService<TransactionBuilder<TestEntity>>()
-            .ForSingleEntity(entityId);
+        var transactionBuilder = await serviceScope.ServiceProvider
+            .GetRequiredService<ITransactionBuilderFactory<TEntity>>()
+            .CreateForSingleEntity(default!, default);
 
         await using var entityRepository = await serviceScope.ServiceProvider
-            .GetRequiredService<IEntityRepositoryFactory<TestEntity>>()
+            .GetRequiredService<IEntityRepositoryFactory<TEntity>>()
             .CreateRepository(default!);
 
-        var entity = await entityRepository.GetCurrent(entityId);
+        var entity = await entityRepository.GetSnapshot(entityId);
 
         // ACT
 
         var transaction = transactionBuilder
             .Load(entity)
             .Append(new DoNothing())
-            .Build(default!, default);
+            .Build(default);
 
         // ASSERT
 
         transaction.Steps.Length.ShouldBe(1);
 
-        var commandTransactionStep = transaction.Steps[0].ShouldBeAssignableTo<IAppendCommandTransactionStep>()!;
+        var commandTransactionStep =
+            transaction.Steps[0].ShouldBeAssignableTo<IAppendCommandTransactionStep>().ShouldNotBeNull();
 
         commandTransactionStep.Command.ShouldBeEquivalentTo(new DoNothing());
+    }
+
+    [Theory]
+    [MemberData(nameof(AddEntity))]
+    public Task GivenEntityNotKnown_WhenGettingEntity_ThenThrow(EntityAdder entityAdder)
+    {
+        return RunGenericTestAsync
+        (
+            new[] { entityAdder.EntityType },
+            new object?[] { entityAdder }
+        );
+    }
+
+    [Theory]
+    [MemberData(nameof(AddEntity))]
+    public Task GivenEntityKnown_WhenGettingEntity_ThenReturnExpectedEntity(EntityAdder entityAdder)
+    {
+        return RunGenericTestAsync
+        (
+            new[] { entityAdder.EntityType },
+            new object?[] { entityAdder }
+        );
+    }
+
+    [Theory]
+    [MemberData(nameof(AddEntity))]
+    public Task GivenLeasingStrategy_WhenBuildingNewEntityWithLease_ThenTransactionDoesInsertLeases(
+        EntityAdder entityAdder)
+    {
+        return RunGenericTestAsync
+        (
+            new[] { entityAdder.EntityType },
+            new object?[] { entityAdder }
+        );
+    }
+
+    [Theory]
+    [MemberData(nameof(AddEntity))]
+    public Task GivenExistingEntityId_WhenUsingEntityIdForLoadTwice_ThenLoadThrows(EntityAdder entityAdder)
+    {
+        return RunGenericTestAsync
+        (
+            new[] { entityAdder.EntityType },
+            new object?[] { entityAdder }
+        );
+    }
+
+    [Theory]
+    [MemberData(nameof(AddEntity))]
+    public Task GivenNonExistingEntityId_WhenUsingValidVersioningStrategy_ThenVersionNumberAutoIncrements(
+        EntityAdder entityAdder)
+    {
+        return RunGenericTestAsync
+        (
+            new[] { entityAdder.EntityType },
+            new object?[] { entityAdder }
+        );
+    }
+
+    [Theory]
+    [MemberData(nameof(AddEntity))]
+    public Task GivenExistingEntity_WhenAppendingNewCommand_ThenTransactionBuilds(EntityAdder entityAdder)
+    {
+        return RunGenericTestAsync
+        (
+            new[] { entityAdder.EntityType },
+            new object?[] { entityAdder }
+        );
     }
 }
